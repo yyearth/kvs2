@@ -7,8 +7,8 @@ import numpy as np
 import cv2
 import socket
 import threading
-from multiprocessing import Process
-from queue import Queue
+# from multiprocessing import Process, Queue
+# from queue import Queue
 import xml.etree.ElementTree as ET
 import time
 
@@ -106,12 +106,13 @@ class SocketThread(threading.Thread):
         super().__init__()
         self.addr = addr
         self.sock = socket.socket()
-        print('connecting...')
-        self.sock.connect(self.addr)
-        print('connect to KUKA server@', self.addr)
+
 
     def run(self):
         global Ready
+        print('connecting...')
+        self.sock.connect(self.addr)
+        print('connect to KUKA server@', self.addr)
         while True:
             rec = self.sock.recv(1024).decode('ascii')
             Ready = True
