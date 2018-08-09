@@ -8,40 +8,44 @@ import cv2
 import socket
 import threading
 # from multiprocessing import Process, Queue
-# from queue import Queue
+from queue import Queue
 import xml.etree.ElementTree as ET
 import time
 
+HOME = [-56.03466, -81.602425, 28.294651, -118.515602, 87.063118, -118.872986]
+# HOME = [73.93824, -80.937424, 23.428364, -118.515602, 87.063118, -118.872978]
 fc = (1301.11026, 1298.09944)
 cc = (361.16784, 213.44209)
 kc = (0.07171, 0.61192, -0.00554, -0.00077, 0.00000)
 
-mtx = np.array([[fc[0],     0, cc[0]],
-                [    0, fc[1], cc[1]],
-                [    0,     0,    1]])
+mtx = np.array([[fc[0], 0, cc[0]],
+                [0, fc[1], cc[1]],
+                [0, 0, 1]])
 dist = np.array((0.07171, 0.61192, -0.00554, -0.00077, 0.00000))
 
 wr = 31
 Ready = False
 
-def center(img,principle=True):
+
+def center(img, principle=True):  # draw center cross
     h, w = img.shape[:2]
     if principle:
-        cv2.line(img, (0, int(cc[1])), (w, int(cc[1])),(0, 255, 0))
-        cv2.line(img, (int(cc[0]), 0), (int(cc[0]), h),(0, 255, 0))
+        cv2.line(img, (0, int(cc[1])), (w, int(cc[1])), (0, 255, 0))
+        cv2.line(img, (int(cc[0]), 0), (int(cc[0]), h), (0, 255, 0))
     else:
-        cv2.line(img, (0, h//2), (w, h//2), (0, 255, 0))
-        cv2.line(img, (w//2, 0), (w//2, h), (0, 255, 0))
+        cv2.line(img, (0, h // 2), (w, h // 2), (0, 255, 0))
+        cv2.line(img, (w // 2, 0), (w // 2, h), (0, 255, 0))
 
     return img
 
-def framewrappe(x, y, z, a, b, c):
+
+def framewrapper(x, y, z, a, b, c):  # wrap a frame into xml string
     data = '<Sensor><frame X="%.6f" Y="%.6f" Z="%.6f" ' \
            'A="%.6f" B="%.6f" C="%.6f"/></Sensor>' % (x, y, z, a, b, c)
     return data
 
 
-def frameparse(sr):
+def frameparse(sr):  # parse xml, return data list
     root = ET.fromstring(sr)
     if root is None:
         return None
@@ -50,8 +54,16 @@ def frameparse(sr):
 
 
 class ColorTracker(object):
+    """
+    track curtain color in HSV color space
+    """
 
     def __init__(self, bgr=None, sigma=5):
+        """
+
+        :param bgr:  target color BGR
+        :param sigma:
+        """
         # super().__init__()
         self._sigma = sigma
         self._targetbgr = bgr
@@ -68,6 +80,11 @@ class ColorTracker(object):
         self._color_u = np.array([cv2.add(hsv[0][0], self._sigma)[0][0], 255, 255], np.uint8)
 
     def track(self, img):
+        """
+        track obj in img.
+        :param img:
+        :return:
+        """
         sh, sw, _ = img.shape
         x, y = cc[0], cc[1]
         u, v, w, h = -1, -1, 0, 0
@@ -89,7 +106,7 @@ class ColorTracker(object):
             cv2.rectangle(img, (ix, iy), (ix + iw, iy + ih), (0, 255, 0), 1)
 
         if len(contours) > 0:
-            cnt_max = max(contours, key=cv2.contourArea)
+            cnt_max = max(contours, key=cv2.contourArea)  #
             if cv2.contourArea(cnt_max) < 700:
                 return u, v, w, h, cc[0], cc[1]
             u, v, w, h = cv2.boundingRect(cnt_max)
@@ -107,40 +124,63 @@ class SocketThread(threading.Thread):
         self.addr = addr
         self.sock = socket.socket()
 
-
     def run(self):
+        """
+        override Thread method run()
+        :return:
+        """
         global Ready
         print('connecting...')
         self.sock.connect(self.addr)
-        print('connect to KUKA server@', self.addr)
+        # try:
+        #     print('connecting...')
+        #     self.sock.connect(self.addr)
+        # except TimeoutError as e:
+        #     print(e)
+        # except ConnectionRefusedError as e:
+        #     print(e)
+        print('connect to KUKA server @ ', self.addr)
         while True:
             rec = self.sock.recv(1024).decode('ascii')
             Ready = True
             data = frameparse(rec)
+
             # data[0]  data[1]  data[2]  data[3]  data[4]  data[5]
             #   X        Y        Z        A        B        C
             # print(data)
             # position.put(data)
-            # id, idX, idY = target.get()
-            # data[1] = data[1] + 5
-            # data[2] = data[2] - idY
+            id, idX, idY = target.get()
+            print('position now:', data)
+            print('get from main thread:', id, idX, idY)
+            if abs(id) > 150:
+                data[0] = data[0] + id - 100
+            data[1] = data[1] - idX
+            data[2] = data[2] - idY
+
+            if abs(idX) < 1 and abs(idY) < 1:
+                data = HOME
+                print('Back to HOME', end=' ')
             # time.sleep(1)
             print(data)
-            data = framewrappe(*data).encode('ascii')
+            data = framewrapper(*data).encode('ascii')
             self.sock.send(data)
             Ready = False
+        self.sock.close()
 
 
 if __name__ == '__main__':
+
     cap = cv2.VideoCapture(0)
     ret, frame = cap.read()
+    out = cv2.VideoWriter('out4.avi', -1, 20.0, (640, 480))  
     h, w = frame.shape[:2]
     d, dX, dY = 0, 0, 0
     target = Queue(maxsize=1)
     position = Queue(maxsize=1)
-    ct = ColorTracker([255, 232,  7], 10)
+    ct = ColorTracker([197, 104, 1], 10)
     newcameramtx, roi = cv2.getOptimalNewCameraMatrix(mtx, dist, (w, h), 0, (w, h))
-    SocketThread(('172.31.1.147', 54600)).start()  # ('172.31.1.147', 54600)
+    st = SocketThread(('172.31.1.1', 54600))
+    st.start()  # ('172.31.1.147', 54600)
     # while True:
     #     time.sleep(1)
     while True:
@@ -151,12 +191,13 @@ if __name__ == '__main__':
         center(frame, True)
         if u != -1:
             wp = max(iw, ih)
-            d = fc[0]*(wr/wp)
-            dX = x*wr/wp
-            dY = y*wr/wp
-            cv2.putText(frame, 'd:%3.2f dX:%3.2f dY:%3.2f' % (d, dX, dY), (30, 30),
-                        cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 0, 255))
+            d = fc[0] * (wr / wp)
+            dX = x * wr / wp
+            dY = y * wr / wp
+            cv2.putText(frame, 'd:%3.2f dX:%3.2f dY:%3.2f' % (d, dX, dY), (10, 430),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 1)
         cv2.imshow('img', frame)
+        out.write(frame)
         key = cv2.waitKey(1)
         if key == 13:
             if Ready:
@@ -165,11 +206,12 @@ if __name__ == '__main__':
                 else:
                     target.get()
                     target.put((d, dX, dY))
-            else: print('busy...')
+            else:
+                print('busy...')
         elif key == 27:
             break
         elif key == ord('s'):
             cv2.imwrite('snap.jpg', frame)
+    out.release()
     cv2.destroyAllWindows()
     cap.release()
-
